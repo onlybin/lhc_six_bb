@@ -51,7 +51,7 @@ def run_predictor_with_fallback():
         exit(1)
 
 def generate_report(latest_prediction, analysis_data):
-    # 这里保留你原本的 Markdown 报告生成逻辑，一字不改
+    # 保留原有的 Markdown 报告生成逻辑
     print("\n>>> 正在组装全模态分析报告...")
     total_records = analysis_data.get('total_records', 0)
     
@@ -76,12 +76,15 @@ def generate_report(latest_prediction, analysis_data):
     normal_text_block = '\n'.join(normal_rec_text)
 
     import datetime
-    report_date = datetime.date.today().strftime('%Y年%m月%d日')
+    # 强制转换为东八区时间，适应云端 UTC 环境
+    tz = datetime.timezone(datetime.timedelta(hours=8))
+    report_time = datetime.datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')
+    
     attributes = latest_prediction.get('combo_attributes', {})
 
     report_content = f"""# 📊 AI 量化推演核心决策大屏
 
-**报告生成时间:** {report_date} | **目标推演期数:** 第 {latest_prediction.get('next_period')} 期
+**最近更新时间:** {report_time} | **目标推演期数:** 第 {latest_prediction.get('next_period')} 期
 
 > **[系统提示]** 基础算力平台已全面升级至 SQLite 关系型数据库底层，保障高并发分析安全。本期推演基于 {total_records} 期无损全量回溯。
 
@@ -101,7 +104,7 @@ def generate_report(latest_prediction, analysis_data):
 """
     with open(REPORT_FILE, 'w', encoding='utf-8') as f:
         f.write(report_content)
-
+        
 def main():
     # 清理旧缓存
     for f in [ANALYSIS_RESULT_FILE, PREDICTION_RESULT_FILE, CHART_DATA_FILE, REPORT_FILE]:
