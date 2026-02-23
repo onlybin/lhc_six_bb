@@ -85,9 +85,10 @@ def get_ensemble_probabilities(X_train, y_train, X_predict):
     # --------------------------------------------------
     # 三级异构网络 Stacking 融合
     # --------------------------------------------------
-    print(">>> [AI 核心模块] 计算完毕，正在执行概率融合 (RF 35% + XGB 35% + LSTM 30%)...")
+    print(">>> [AI 核心模块] 计算完毕，正在执行概率融合 (RF 45% + XGB 45% + LSTM 10%)...")
     
     # 权重解释：树模型处理离散静态特征更稳定占主导，LSTM 补充捕捉非线性动态序列占 30%
-    ensemble_probabilities = (rf_prob * 0.35) + (xgb_prob * 0.35) + (lstm_prob * 0.30)
+    ensemble_probabilities = (rf_prob * 0.45) + (xgb_prob * 0.45) + (lstm_prob * 0.10)
     
     return ensemble_probabilities
+
