@@ -9,8 +9,9 @@ import ai_models
 
 def get_current_zodiac_map(ref_year):
     zodiac_order = ['鼠', '牛', '虎', '兔', '龍', '蛇', '馬', '羊', '猴', '雞', '狗', '豬']
+    year = ref_year
     base_year = 2020
-    current_zodiac_idx = (ref_year - base_year) % 12
+    current_zodiac_idx = (year - base_year) % 12
     zodiac_map = {z: [] for z in zodiac_order}
     for num in range(1, 50):
         offset = (num - 1) % 12
@@ -63,7 +64,7 @@ def run_backtest(test_window=20, db_file='lottery.db'):
         print("错误：数据量不足以支撑回测窗口与特征冷启动要求。")
         return
 
-    print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] 开始执行量化回测 (深度特征版)...")
+    print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] 开始执行量化回测...")
     print(f"总数据量: {total_records} 期 | 回测窗口: 近 {test_window} 期")
     print("-" * 60)
 
@@ -100,14 +101,13 @@ def run_backtest(test_window=20, db_file='lottery.db'):
         miss_tracker = {n: 0 for n in range(1, 50)}
         freq_all = {n: 0 for n in range(1, 50)}
         recent_50_queue = deque(maxlen=50) 
-        recent_30_queue = deque(maxlen=30)
-        recent_10_special_colors = deque(maxlen=10)
-        recent_10_special_wuxing = deque(maxlen=10)
+        recent_30_queue = deque(maxlen=30) 
         running_trans_counts = defaultdict(lambda: defaultdict(int))
         running_trans_totals = defaultdict(int)
 
         X_train_data = [] 
         y_train_data = [] 
+        
         iso_forest = IsolationForest(contamination=0.1, random_state=42)
         
         for j in range(len(history_slice) - 1):
@@ -119,9 +119,6 @@ def run_backtest(test_window=20, db_file='lottery.db'):
             
             recent_50_queue.append(curr_nums)
             recent_30_queue.append(curr_nums)
-            recent_10_special_colors.append(NUM_TO_COLOR.get(curr_draw['special'], '绿'))
-            recent_10_special_wuxing.append(NUM_TO_WUXING.get(curr_draw['special'], '金'))
-            
             for n in curr_nums: freq_all[n] += 1
             for n in range(1, 50):
                 if n in curr_nums: miss_tracker[n] = 0
@@ -140,30 +137,40 @@ def run_backtest(test_window=20, db_file='lottery.db'):
                     
             last_special_zodiac = curr_draw['special_zodiac']
             last_special_wuxing = NUM_TO_WUXING.get(curr_draw['special'], '金')
+            last_special_color = NUM_TO_COLOR.get(curr_draw['special'], '绿')
             sanhe = RELATIONS['三合'].get(last_special_zodiac, [])
             liuhe = RELATIONS['六合'].get(last_special_zodiac, '')
             zhengchong = RELATIONS['正冲'].get(last_special_zodiac, '')
             liuhai = RELATIONS['六害'].get(last_special_zodiac, '')
 
+            # [深度扩展] 波色连续热度与五行压制比
+            color_streak = 0
+            for past_draw in reversed(history_slice[:j+1]):
+                if NUM_TO_COLOR.get(past_draw['special'], '绿') == last_special_color:
+                    color_streak += 1
+                else:
+                    break
+            recent_5_wuxings = [NUM_TO_WUXING.get(r['special'], '金') for r in history_slice[max(0, j-4):j+1]]
+
             for n in range(1, 50):
                 z = NUM_TO_ZODIAC.get(n, '')
                 w = NUM_TO_WUXING.get(n, '')
                 c = NUM_TO_COLOR.get(n, '绿')
-                
                 zodiac_rel_val = 1 if z in sanhe or z == liuhe else (-1 if z == zhengchong or z == liuhai else 0)
                 wuxing_rel_val = 1 if WUXING_SHENG.get(last_special_wuxing) == w else (-1 if WUXING_KE.get(last_special_wuxing) == w else 0)
                 color_val = 1 if c == '红' else (2 if c == '蓝' else 3) 
                 macd_val = (freq_10[n] / 10.0) - (freq_30[n] / 30.0) if len(recent_30_queue) >= 30 else 0
                 markov_prob = running_trans_counts[last_special_zodiac][z] / running_trans_totals[last_special_zodiac] if running_trans_totals[last_special_zodiac] > 0 else 0.0
                 
-                # 新增深度因子：波色近期聚集度与五行偏态比
-                color_recent_ratio = list(recent_10_special_colors).count(c) / max(1, len(recent_10_special_colors))
-                wuxing_recent_ratio = list(recent_10_special_wuxing).count(w) / max(1, len(recent_10_special_wuxing))
+                color_cont_val = color_streak if c == last_special_color else 0
+                sheng_count = sum(1 for past_w in recent_5_wuxings if WUXING_SHENG.get(past_w) == w)
+                ke_count = sum(1 for past_w in recent_5_wuxings if WUXING_KE.get(past_w) == w)
+                wuxing_sk_ratio = (sheng_count - ke_count) / 5.0
                 
                 feat = [
                     miss_tracker[n], freq_all[n], freq_recent_50[n], macd_val, markov_prob,                
                     1 if n >= 25 else 0, 1 if n % 2 != 0 else 0, zodiac_rel_val, wuxing_rel_val, color_val,
-                    color_recent_ratio, wuxing_recent_ratio  # 注入新因子
+                    color_cont_val, wuxing_sk_ratio
                 ]
                 X_train_data.append(feat)
                 y_train_data.append(1 if n in next_nums else 0)
@@ -176,13 +183,10 @@ def run_backtest(test_window=20, db_file='lottery.db'):
         for idx in range(len(X_train_data)):
             X_train_data[idx].append(anomaly_scores[idx])
 
-        # 构建待预测特征
+        # 构建待预测的最新一期特征
         latest_nums = set(latest['numbers'] + [latest['special']])
         recent_50_queue.append(latest_nums)
         recent_30_queue.append(latest_nums)
-        recent_10_special_colors.append(NUM_TO_COLOR.get(latest['special'], '绿'))
-        recent_10_special_wuxing.append(NUM_TO_WUXING.get(latest['special'], '金'))
-        
         for n in latest_nums: freq_all[n] += 1
         for n in range(1, 50):
             if n in latest_nums: miss_tracker[n] = 0
@@ -207,6 +211,16 @@ def run_backtest(test_window=20, db_file='lottery.db'):
         
         last_special_zodiac = latest['special_zodiac']
         last_special_wuxing = NUM_TO_WUXING.get(latest['special'], '金')
+        last_special_color = NUM_TO_COLOR.get(latest['special'], '绿')
+        
+        color_streak = 0
+        for past_draw in reversed(history_slice):
+            if NUM_TO_COLOR.get(past_draw['special'], '绿') == last_special_color:
+                color_streak += 1
+            else:
+                break
+        recent_5_wuxings = [NUM_TO_WUXING.get(r['special'], '金') for r in history_slice[-5:]]
+
         sanhe = RELATIONS['三合'].get(last_special_zodiac, [])
         liuhe = RELATIONS['六合'].get(last_special_zodiac, '')
         zhengchong = RELATIONS['正冲'].get(last_special_zodiac, '')
@@ -223,13 +237,15 @@ def run_backtest(test_window=20, db_file='lottery.db'):
             macd_val = (freq_10[n] / 10.0) - (freq_30[n] / 30.0) if len(recent_30_queue) >= 30 else 0
             markov_prob = running_trans_counts[last_special_zodiac][z] / running_trans_totals[last_special_zodiac] if running_trans_totals[last_special_zodiac] > 0 else 0.0
             
-            color_recent_ratio = list(recent_10_special_colors).count(c) / max(1, len(recent_10_special_colors))
-            wuxing_recent_ratio = list(recent_10_special_wuxing).count(w) / max(1, len(recent_10_special_wuxing))
+            color_cont_val = color_streak if c == last_special_color else 0
+            sheng_count = sum(1 for past_w in recent_5_wuxings if WUXING_SHENG.get(past_w) == w)
+            ke_count = sum(1 for past_w in recent_5_wuxings if WUXING_KE.get(past_w) == w)
+            wuxing_sk_ratio = (sheng_count - ke_count) / 5.0
 
             feat = [
                 miss_tracker[n], freq_all[n], freq_recent_50[n], macd_val, markov_prob,
                 1 if n >= 25 else 0, 1 if n % 2 != 0 else 0, zodiac_rel_val, wuxing_rel_val, color_val,
-                color_recent_ratio, wuxing_recent_ratio
+                color_cont_val, wuxing_sk_ratio
             ]
             X_predict_data.append(feat)
 
@@ -239,27 +255,46 @@ def run_backtest(test_window=20, db_file='lottery.db'):
 
         import sys, os
         original_stdout = sys.stdout
-        sys.stdout = open(os.devnull, 'w')
+        sys.stdout = open(os.devnull, 'w') 
         ensemble_probabilities = ai_models.get_ensemble_probabilities(X_train_data, y_train_data, X_predict_data)
-        sys.stdout = original_stdout
+        sys.stdout = original_stdout 
 
+        # ==========================================
+        # 4. 偏态补偿、指纹继承与【极值杀号过滤】
+        # ==========================================
         scores = defaultdict(float)
         for n in range(1, 50):
             if n in latest_nums:
                 continue
 
+            # 基础 AI 概率得分
             base_score = ensemble_probabilities[n-1] * 100
+            
             is_big = 1 if n >= 25 else 0
             is_odd = 1 if n % 2 != 0 else 0
             macd_val = X_predict_data[n-1][3]
             
+            # 宏观偏态补偿
             if big_bias > 0.05 and not is_big: base_score += 1.5
             elif big_bias < -0.05 and is_big: base_score += 1.5
             if odd_bias > 0.05 and not is_odd: base_score += 1.5
             elif odd_bias < -0.05 and is_odd: base_score += 1.5
 
             continuous_fingerprint = (miss_tracker[n] * 0.033) + (freq_all[n] * 0.011) - (freq_recent_50[n] * 0.04) + (macd_val * 0.05)
-            scores[n] = base_score + continuous_fingerprint
+            
+            # 🧨 核心升维：极值杀号机制 (反向剔除极小概率事件)
+            penalty = 0
+            # 1. 绝对冷号杀除：遗漏超过 25 期以上的号码，不博反弹，直接降权
+            if miss_tracker[n] > 25:
+                penalty -= 5.0
+            # 2. 衰退热号杀除：最近 10 期内出现超过 3 次，动能透支，强制降温
+            if freq_10[n] >= 3:
+                penalty -= 3.0
+            # 3. 异常分离群惩罚：如果孤立森林认为该号码特征极其诡异（异常分极低）
+            if curr_anomaly_scores[n-1] < -0.15:
+                penalty -= 2.0
+
+            scores[n] = base_score + continuous_fingerprint + penalty
 
         sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         top6_specials = [item[0] for item in sorted_scores[:6]]
@@ -280,7 +315,7 @@ def run_backtest(test_window=20, db_file='lottery.db'):
         normal_hit_rates.append(normal_hit_count)
 
         hit_status = "🎯 TOP1精确命中" if is_top1_hit else ("✅ TOP6矩阵命中" if is_top6_hit else "❌ 未命中")
-        print(f"| 期数: {target_period} | 真实特码: {actual_special:02d} | 预测Top6: {[f'{n:02d}' for n in top6_specials]} | 状态: {hit_status} | 正码命中: {normal_hit_count}/6")
+        print(f"| 期数: {target_period} | 真实特码: {actual_special:02d} | 预测Top6: {[f'{n:02d}' for n in top6_specials]} | 状态: {hit_status} | 正码防守命中: {normal_hit_count}/6")
 
     print("-" * 60)
     print("📊 [量化回测总结报告]")
@@ -291,4 +326,5 @@ def run_backtest(test_window=20, db_file='lottery.db'):
     print("-" * 60)
 
 if __name__ == '__main__':
-    run_backtest(test_window=20)
+    # 将回测窗口扩大至 50 期，获取真实的统计学基线
+    run_backtest(test_window=50)
