@@ -1,15 +1,16 @@
 import json
 import os
 import numpy as np
+import sqlite3
 from collections import defaultdict, deque
 import datetime
 from sklearn.ensemble import IsolationForest
 
-# 🔌 [核心整合]: 像插 U 盘一样，外接你新建的独立 AI 算法库
+# 🔌 接入独立 AI 算法库
 import ai_models
 
 # ==========================================
-# 基础易理与规则字典推算 (完全继承老代码，一字未改)
+# 基础易理与规则字典推算
 # ==========================================
 def get_current_zodiac_map():
     zodiac_order = ['鼠', '牛', '虎', '兔', '龍', '蛇', '馬', '羊', '猴', '雞', '狗', '豬']
@@ -46,9 +47,29 @@ def get_color_map():
         '绿': [5, 6, 11, 16, 17, 21, 22, 27, 28, 32, 33, 38, 39, 43, 44, 49]
     }
 
-def predict_next_period(data_file='lottery_complete.json', output_file='prediction.json', memory_file='learning_memory.json'):
-    with open(data_file, 'r', encoding='utf-8') as f:
-        records = json.load(f)
+# 新增：从 SQLite 数据库提取结构化数据
+def get_records_from_db(db_path='lottery.db'):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT period, raw_time, numbers, zodiacs, special, special_zodiac FROM history ORDER BY period DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    records = []
+    for row in rows:
+        records.append({
+            "period": row[0],
+            "date": row[1],
+            "numbers": json.loads(row[2]),
+            "zodiacs": json.loads(row[3]),
+            "special": row[4],
+            "special_zodiac": row[5]
+        })
+    return records
+
+def predict_next_period(db_file='lottery.db', output_file='prediction.json', memory_file='learning_memory.json'):
+    # 修改：使用 get_records_from_db 替代 json.load
+    records = get_records_from_db(db_file)
 
     latest = records[0]
     next_period = str(int(latest['period']) + 1)
@@ -90,7 +111,7 @@ def predict_next_period(data_file='lottery_complete.json', output_file='predicti
     print("="*50 + "\n")
 
     # ==========================================
-    # 模块 1：特征清洗 (完全继承老代码，提供纯净数据源)
+    # 模块 1：特征清洗
     # ==========================================
     reversed_records = records[::-1]
     miss_tracker = {n: 0 for n in range(1, 50)}
@@ -216,13 +237,12 @@ def predict_next_period(data_file='lottery_complete.json', output_file='predicti
         X_predict_data[idx].append(curr_anomaly_scores[idx])
 
     # ==========================================
-    # 🌟 模块 2：呼叫外部插件 (核心改变就在这一行！)
-    # 老版本这里自己算，新版本把数据甩给 ai_models 算
+    # 🌟 模块 2：呼叫外部插件
     # ==========================================
     ensemble_probabilities = ai_models.get_ensemble_probabilities(X_train_data, y_train_data, X_predict_data)
 
     # ==========================================
-    # 模块 3：继承你的精算师指纹与偏态补偿 (完全未改)
+    # 模块 3：继承指纹与偏态补偿
     # ==========================================
     scores = defaultdict(float)
     for n in range(1, 50):
