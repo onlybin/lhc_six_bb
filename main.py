@@ -15,7 +15,6 @@ CHART_DATA_FILE = 'chart_data.json'
 REPORT_FILE = 'lottery_analysis_report.md'
 
 def run_script(script_name, *args):
-    """基础运行函数：适用于不会报错的普通爬虫和数据分析组件"""
     cmd = [sys.executable, script_name] + list(args)
     print(f"\n>>> 正在运行: {' '.join(cmd)}")
     process = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
@@ -26,24 +25,21 @@ def run_script(script_name, *args):
     return process.stdout
 
 def run_predictor_with_fallback():
-    """🌟 智能容灾降级机制：优先跑 Pro 版，报错则自动回退旧版"""
+    """智能容灾降级机制：优先跑 Pro 版，报错则自动回退旧版"""
     print("\n>>> 🚀 尝试启动 [Pro 增强版] 双引擎推演 (predictor_pro.py)...")
     cmd_pro = [sys.executable, 'predictor_pro.py']
     process_pro = subprocess.run(cmd_pro, capture_output=True, text=True, encoding='utf-8', errors='ignore')
     
-    # 如果 Pro 版完美运行，直接输出并结束
     if process_pro.returncode == 0:
         print(process_pro.stdout)
         return
         
-    # 如果 Pro 版报错了，拦截报错并触发降级方案
     print(f"⚠️ [Pro 版本运行异常] (系统已拦截):\n{process_pro.stderr}")
     print(">>> 🔄 触发自动降级保护：正在切换回 [基础稳定版] 单引擎推演 (predictor.py)...")
     
     cmd_base = [sys.executable, 'predictor.py']
     process_base = subprocess.run(cmd_base, capture_output=True, text=True, encoding='utf-8', errors='ignore')
     
-    # 检查基础版是否能挺住
     if process_base.returncode == 0:
         print(process_base.stdout)
     else:
@@ -51,7 +47,6 @@ def run_predictor_with_fallback():
         exit(1)
 
 def generate_report(latest_prediction, analysis_data):
-    # 保留原有的 Markdown 报告生成逻辑
     print("\n>>> 正在组装全模态分析报告...")
     total_records = analysis_data.get('total_records', 0)
     
@@ -76,7 +71,7 @@ def generate_report(latest_prediction, analysis_data):
     normal_text_block = '\n'.join(normal_rec_text)
 
     import datetime
-    # 强制转换为东八区时间，适应云端 UTC 环境
+    # 强制转换为东八区时间
     tz = datetime.timezone(datetime.timedelta(hours=8))
     report_time = datetime.datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')
     
@@ -104,22 +99,19 @@ def generate_report(latest_prediction, analysis_data):
 """
     with open(REPORT_FILE, 'w', encoding='utf-8') as f:
         f.write(report_content)
-        
+
 def main():
-    # 清理旧缓存
     for f in [ANALYSIS_RESULT_FILE, PREDICTION_RESULT_FILE, CHART_DATA_FILE, REPORT_FILE]:
         if os.path.exists(f):
             try: os.remove(f)
             except: pass
 
-    # 执行流水线
     run_script('fetcher.py')
     run_script('analyzer.py')
     
-    # 🌟 调用带有容灾保护的推演引擎
+    # 执行包含降级机制的引擎
     run_predictor_with_fallback()
 
-    # 读取结果并生成大屏
     with open(PREDICTION_RESULT_FILE, 'r', encoding='utf-8') as f:
         prediction_data = json.load(f)
     with open(ANALYSIS_RESULT_FILE, 'r', encoding='utf-8') as f:
