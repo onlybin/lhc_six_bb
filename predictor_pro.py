@@ -1,17 +1,9 @@
 import json
-import os
-import numpy as np
 import sqlite3
-from collections import defaultdict, deque
 import datetime
-from sklearn.ensemble import IsolationForest
+from collections import deque
+import os
 
-# 🔌 接入独立 AI 算法库
-import ai_models
-
-# ==========================================
-# 基础易理与规则字典推算
-# ==========================================
 def get_current_zodiac_map():
     zodiac_order = ['鼠', '牛', '虎', '兔', '龍', '蛇', '馬', '羊', '猴', '雞', '狗', '豬']
     now = datetime.datetime.now()
@@ -47,11 +39,10 @@ def get_color_map():
         '绿': [5, 6, 11, 16, 17, 21, 22, 27, 28, 32, 33, 38, 39, 43, 44, 49]
     }
 
-# 新增：从 SQLite 数据库提取结构化数据
 def get_records_from_db(db_path='lottery.db'):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    cursor.execute("SELECT period, raw_time, numbers, zodiacs, special, special_zodiac FROM history ORDER BY period DESC")
+    cursor.execute("SELECT period, numbers, special, special_zodiac FROM history ORDER BY period ASC")
     rows = cursor.fetchall()
     conn.close()
     
@@ -59,19 +50,19 @@ def get_records_from_db(db_path='lottery.db'):
     for row in rows:
         records.append({
             "period": row[0],
-            "date": row[1],
-            "numbers": json.loads(row[2]),
-            "zodiacs": json.loads(row[3]),
-            "special": row[4],
-            "special_zodiac": row[5]
+            "numbers": json.loads(row[1]),
+            "special": row[2],
+            "special_zodiac": row[3]
         })
     return records
 
-def predict_next_period(db_file='lottery.db', output_file='prediction.json', memory_file='learning_memory.json'):
-    # 修改：使用 get_records_from_db 替代 json.load
+def predict_next_period(db_file='lottery.db', output_file='prediction.json'):
     records = get_records_from_db(db_file)
-
-    latest = records[0]
+    if not records:
+        print("错误：数据库为空。")
+        return
+        
+    latest = records[-1]
     next_period = str(int(latest['period']) + 1)
     
     ZODIAC_MAP = get_current_zodiac_map()
@@ -81,210 +72,75 @@ def predict_next_period(db_file='lottery.db', output_file='prediction.json', mem
     COLOR_MAP = get_color_map()
     NUM_TO_COLOR = {n: c for c, nums in COLOR_MAP.items() for n in nums}
 
-    RELATIONS = {
-        '三合': {'鼠':['龍','猴'], '牛':['蛇','雞'], '虎':['馬','狗'], '兔':['豬','羊'], '龍':['鼠','猴'], '蛇':['牛','雞'], '馬':['虎','狗'], '羊':['兔','豬'], '猴':['鼠','龍'], '雞':['牛','蛇'], '狗':['虎','馬'], '豬':['兔','羊']},
-        '六合': {'鼠':'牛', '牛':'鼠', '虎':'豬', '豬':'虎', '兔':'狗', '狗':'兔', '龍':'雞', '雞':'龍', '蛇':'猴', '猴':'蛇', '馬':'羊', '羊':'馬'},
-        '正冲': {'鼠':'馬', '馬':'鼠', '牛':'羊', '羊':'牛', '虎':'猴', '猴':'虎', '兔':'雞', '雞':'兔', '龍':'狗', '狗':'龍', '蛇':'豬', '豬':'蛇'},
-        '六害': {'鼠':'羊', '羊':'鼠', '牛':'馬', '馬':'牛', '虎':'蛇', '蛇':'虎', '兔':'龍', '龍':'兔', '猴':'豬', '豬':'猴', '狗':'雞', '雞':'狗'}
-    }
-    WUXING_SHENG = {'金':'水', '水':'木', '木':'火', '火':'土', '土':'金'}
-    WUXING_KE = {'金':'木', '木':'土', '土':'水', '水':'火', '火':'金'}
-
     print("\n" + "="*50)
-    print("[系统] 量化分析与记忆读取中...")
-    latest_actual_nums = set(latest['numbers'])
-    latest_actual_special = latest['special']
-    
-    if os.path.exists(memory_file):
-        with open(memory_file, 'r', encoding='utf-8') as mf:
-            memory = json.load(mf)
-        if memory.get('target_period') == latest['period']:
-            pred_normals = set(memory.get('recommended_normal', []))
-            pred_specials = set(memory.get('recommended_special', []))
-            hit_normals = pred_normals.intersection(latest_actual_nums)
-            hit_special = latest_actual_special in pred_specials
-            print(f"  [复盘期数]: 第 {latest['period']} 期")
-            print(f"  [实际开出]: 正码 {latest['numbers']} | 特码 {latest_actual_special}")
-            print(f"  [系统推演]: 推荐正码 {list(pred_normals)} | 特码矩阵 {list(pred_specials)}")
-        else:
-            print("  [状态]: 暂无匹配的上一期记忆，开始初始化学习。")
+    print(f"[系统] 启动【行为金融·资金热力盲区】实盘引擎 - 目标期数: {next_period}")
     print("="*50 + "\n")
 
-    # ==========================================
-    # 模块 1：特征清洗
-    # ==========================================
-    reversed_records = records[::-1]
     miss_tracker = {n: 0 for n in range(1, 50)}
-    freq_all = {n: 0 for n in range(1, 50)}
-    recent_50_queue = deque(maxlen=50) 
-    recent_30_queue = deque(maxlen=30) 
-    running_trans_counts = defaultdict(lambda: defaultdict(int))
-    running_trans_totals = defaultdict(int)
-
-    X_train_data = [] 
-    y_train_data = [] 
+    freq_10 = {n: 0 for n in range(1, 50)}
+    recent_30_queue = deque(maxlen=30)
     
-    iso_forest = IsolationForest(contamination=0.1, random_state=42)
-    
-    for i in range(len(reversed_records) - 1):
-        curr_draw = reversed_records[i]
-        next_draw = reversed_records[i+1]
-        
-        curr_nums = set(curr_draw['numbers'] + [curr_draw['special']])
-        next_nums = set(next_draw['numbers'] + [next_draw['special']])
-        
-        recent_50_queue.append(curr_nums)
+    for r in records:
+        curr_nums = set(r['numbers'] + [r['special']])
         recent_30_queue.append(curr_nums)
-        for n in curr_nums: freq_all[n] += 1
         for n in range(1, 50):
             if n in curr_nums: miss_tracker[n] = 0
             else: miss_tracker[n] += 1
 
-        freq_recent_50 = {n: 0 for n in range(1, 50)}
-        for past_nums in recent_50_queue:
-            for n in past_nums: freq_recent_50[n] += 1
-                
-        freq_10 = {n: 0 for n in range(1, 50)}
-        freq_30 = {n: 0 for n in range(1, 50)}
-        for past_nums in list(recent_30_queue)[-10:]:
-            for n in past_nums: freq_10[n] += 1
-        for past_nums in recent_30_queue:
-            for n in past_nums: freq_30[n] += 1
-                
-        last_special_zodiac = curr_draw['special_zodiac']
-        last_special_wuxing = NUM_TO_WUXING.get(curr_draw['special'], '金')
-        sanhe = RELATIONS['三合'].get(last_special_zodiac, [])
-        liuhe = RELATIONS['六合'].get(last_special_zodiac, '')
-        zhengchong = RELATIONS['正冲'].get(last_special_zodiac, '')
-        liuhai = RELATIONS['六害'].get(last_special_zodiac, '')
-
-        for n in range(1, 50):
-            z = NUM_TO_ZODIAC.get(n, '')
-            w = NUM_TO_WUXING.get(n, '')
-            c = NUM_TO_COLOR.get(n, '绿')
-            zodiac_rel_val = 1 if z in sanhe or z == liuhe else (-1 if z == zhengchong or z == liuhai else 0)
-            wuxing_rel_val = 1 if WUXING_SHENG.get(last_special_wuxing) == w else (-1 if WUXING_KE.get(last_special_wuxing) == w else 0)
-            color_val = 1 if c == '红' else (2 if c == '蓝' else 3) 
-            macd_val = (freq_10[n] / 10.0) - (freq_30[n] / 30.0) if len(recent_30_queue) >= 30 else 0
-            markov_prob = running_trans_counts[last_special_zodiac][z] / running_trans_totals[last_special_zodiac] if running_trans_totals[last_special_zodiac] > 0 else 0.0
-            
-            feat = [
-                miss_tracker[n], freq_all[n], freq_recent_50[n], macd_val, markov_prob,                
-                1 if n >= 25 else 0, 1 if n % 2 != 0 else 0, zodiac_rel_val, wuxing_rel_val, color_val
-            ]
-            X_train_data.append(feat)
-            y_train_data.append(1 if n in next_nums else 0)
-            
-        running_trans_counts[curr_draw['special_zodiac']][next_draw['special_zodiac']] += 1
-        running_trans_totals[curr_draw['special_zodiac']] += 1
-
-    iso_forest.fit(X_train_data)
-    anomaly_scores = iso_forest.decision_function(X_train_data)
-    for idx in range(len(X_train_data)):
-        X_train_data[idx].append(anomaly_scores[idx])
-
-    # 最新一期的特征构造
-    latest_nums = set(latest['numbers'] + [latest['special']])
-    recent_50_queue.append(latest_nums)
-    recent_30_queue.append(latest_nums)
-    for n in latest_nums: freq_all[n] += 1
-    for n in range(1, 50):
-        if n in latest_nums: miss_tracker[n] = 0
-        else: miss_tracker[n] += 1
-
-    freq_recent_50 = {n: 0 for n in range(1, 50)}
-    for past_nums in recent_50_queue:
-        for n in past_nums: freq_recent_50[n] += 1
-            
-    freq_10 = {n: 0 for n in range(1, 50)}
-    freq_30 = {n: 0 for n in range(1, 50)}
     for past_nums in list(recent_30_queue)[-10:]:
         for n in past_nums: freq_10[n] += 1
-    for past_nums in recent_30_queue:
-        for n in past_nums: freq_30[n] += 1
 
-    recent_10_big = sum(1 for r in records[:10] for n in r['numbers']+[r['special']] if n >= 25)
-    recent_10_odd = sum(1 for r in records[:10] for n in r['numbers']+[r['special']] if n % 2 != 0)
-    big_bias = (recent_10_big / 70.0) - 0.5
-    odd_bias = (recent_10_odd / 70.0) - 0.5
+    reversed_hist = records[::-1]
+    recent_5_big = sum(1 for r in reversed_hist[:5] for n in r['numbers']+[r['special']] if n >= 25)
+    recent_5_odd = sum(1 for r in reversed_hist[:5] for n in r['numbers']+[r['special']] if n % 2 != 0)
     
-    last_special_zodiac = latest['special_zodiac']
-    last_special_wuxing = NUM_TO_WUXING.get(latest['special'], '金')
-    sanhe = RELATIONS['三合'].get(last_special_zodiac, [])
-    liuhe = RELATIONS['六合'].get(last_special_zodiac, '')
-    zhengchong = RELATIONS['正冲'].get(last_special_zodiac, '')
-    liuhai = RELATIONS['六害'].get(last_special_zodiac, '')
+    big_heavy_bet = recent_5_big > 20
+    small_heavy_bet = recent_5_big < 15
+    odd_heavy_bet = recent_5_odd > 20
+    even_heavy_bet = recent_5_odd < 15
 
-    X_predict_data = []
+    # ==========================================
+    # 核心：纯粹的资金行为热力学 (剔除无效玄学噪音)
+    # ==========================================
+    capital_heat = {}
     for n in range(1, 50):
-        z = NUM_TO_ZODIAC.get(n, '')
-        w = NUM_TO_WUXING.get(n, '')
-        c = NUM_TO_COLOR.get(n, '绿')
-        zodiac_rel_val = 1 if z in sanhe or z == liuhe else (-1 if z == zhengchong or z == liuhai else 0)
-        wuxing_rel_val = 1 if WUXING_SHENG.get(last_special_wuxing) == w else (-1 if WUXING_KE.get(last_special_wuxing) == w else 0)
-        color_val = 1 if c == '红' else (2 if c == '蓝' else 3)
-        macd_val = (freq_10[n] / 10.0) - (freq_30[n] / 30.0) if len(recent_30_queue) >= 30 else 0
-        markov_prob = running_trans_counts[last_special_zodiac][z] / running_trans_totals[last_special_zodiac] if running_trans_totals[last_special_zodiac] > 0 else 0.0
+        heat = 100.0  
         
-        feat = [
-            miss_tracker[n], freq_all[n], freq_recent_50[n], macd_val, markov_prob,
-            1 if n >= 25 else 0, 1 if n % 2 != 0 else 0, zodiac_rel_val, wuxing_rel_val, color_val
-        ]
-        X_predict_data.append(feat)
+        # 1. 生日历法效应 (轻微影响)
+        if n <= 31: heat += 25.0
+            
+        # 2. 赌徒谬误：追冷倍投 (极高权重)
+        if miss_tracker[n] >= 10:
+            heat += 15.0 + (miss_tracker[n] - 10) * 8.0 
+        if miss_tracker[n] > 20:
+            heat += 100.0 
 
-    curr_anomaly_scores = iso_forest.decision_function(X_predict_data)
-    for idx in range(len(X_predict_data)):
-        X_predict_data[idx].append(curr_anomaly_scores[idx])
+        # 3. 追涨杀跌：旺码跟风 (高权重)
+        if miss_tracker[n] == 0: heat += 40.0
+        if freq_10[n] >= 3: heat += 50.0 
+            
+        # 4. 宏观偏态反推：抄底资金涌入
+        is_big = n >= 25
+        is_odd = n % 2 != 0
+        if big_heavy_bet and not is_big: heat += 60.0
+        if small_heavy_bet and is_big: heat += 60.0
+        if odd_heavy_bet and not is_odd: heat += 60.0
+        if even_heavy_bet and is_odd: heat += 60.0
+
+        capital_heat[n] = heat
 
     # ==========================================
-    # 🌟 模块 2：呼叫外部插件
+    # 庄家视角：热度越低，安全分数越高 (越可能被开出)
     # ==========================================
-    ensemble_probabilities = ai_models.get_ensemble_probabilities(X_train_data, y_train_data, X_predict_data)
-
-    # ==========================================
-    # 模块 3：继承指纹与偏态补偿
-    # ==========================================
-    scores = defaultdict(float)
+    scores = {}
     for n in range(1, 50):
-        if n in latest_nums:
-            continue
-
-        base_score = ensemble_probabilities[n-1] * 100
-        is_big = 1 if n >= 25 else 0
-        is_odd = 1 if n % 2 != 0 else 0
-        macd_val = X_predict_data[n-1][3]
-        
-        if big_bias > 0.05 and not is_big: base_score += 1.5
-        elif big_bias < -0.05 and is_big: base_score += 1.5
-        if odd_bias > 0.05 and not is_odd: base_score += 1.5
-        elif odd_bias < -0.05 and is_odd: base_score += 1.5
-
-        continuous_fingerprint = (miss_tracker[n] * 0.033) + (freq_all[n] * 0.011) - (freq_recent_50[n] * 0.04) + (macd_val * 0.05)
-        scores[n] = base_score + continuous_fingerprint
+        scores[n] = 1000.0 - capital_heat[n]
 
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     
-    print(f"\n>>> 双引擎融合推演完毕 - 第 {next_period} 期高分特码雷达 (前6名观测):")
-    top6_specials = []
-    for i, (num, score) in enumerate(sorted_scores[:6]):
-        zodiac = NUM_TO_ZODIAC.get(num, '?')
-        wuxing = NUM_TO_WUXING.get(num, '?')
-        color = NUM_TO_COLOR.get(num, '?')
-        macd = X_predict_data[num-1][3]
-        macd_tag = "[+升温]" if macd > 0 else ("[-降温]" if macd < 0 else "[平稳]")
-        print(f"  顺位 {i+1}: 号码 {num:02d} ({zodiac}/{wuxing}/{color}波) {macd_tag} - 综合权重: {score:.3f}")
-        top6_specials.append(num)
-    
+    top6_specials = [item[0] for item in sorted_scores[:6]]
     primary_special = top6_specials[0]
-    
-    normal_candidates = []
-    for num, score in sorted_scores:
-        if num == primary_special: 
-            continue
-        normal_candidates.append(num)
-        if len(normal_candidates) >= 6:
-            break
-            
+    normal_candidates = [item[0] for item in sorted_scores[6:12]]
     normal_candidates.sort()
     
     all_recommended = normal_candidates + [primary_special]
@@ -316,16 +172,7 @@ def predict_next_period(db_file='lottery.db', output_file='prediction.json', mem
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(prediction, f, ensure_ascii=False, indent=2)
 
-    memory_data = {
-        'target_period': next_period,
-        'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'recommended_normal': normal_candidates,
-        'recommended_special': top6_specials            
-    }
-    with open(memory_file, 'w', encoding='utf-8') as mf:
-        json.dump(memory_data, mf, ensure_ascii=False, indent=2)
-
-    print(f"\n推演完成！基础代码已原样保留，XGBoost 模型插件调用成功。")
+    print(f"✅ 庄家盲区防守矩阵已生成！分析源已写入 {output_file}，准备通过主程序推送大屏。")
 
 if __name__ == '__main__':
     predict_next_period()
