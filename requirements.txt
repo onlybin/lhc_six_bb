@@ -1,6 +1,2 @@
 requests
 pandas
-scikit-learn
-numpy
-xgboost
-tensorflow-cpu
