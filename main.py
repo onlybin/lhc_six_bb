@@ -77,22 +77,23 @@ def generate_report(latest_prediction, analysis_data):
     
     attributes = latest_prediction.get('combo_attributes', {})
 
-    report_content = f"""# 📊 AI 量化推演核心决策大屏
+report_content = f"""# 📊 行为金融与资金热力反推大屏
 
 **最近更新时间:** {report_time} | **目标推演期数:** 第 {latest_prediction.get('next_period')} 期
 
-> **[系统提示]** 基础算力平台已全面升级至 SQLite 关系型数据库底层，保障高并发分析安全。本期推演基于 {total_records} 期无损全量回溯。
+> **[系统提示]** 底层算法已切换至【散户资金热力反推模型】。推演逻辑基于追热、博反弹、倍投追漏等散户博弈心理，为您锁定庄家低赔付的安全盲区。
 
 ---
 
-### 🎯 2.1 特码预测 (高置信度矩阵)
-*(注：列表依据孤立森林异常分、时序 MACD 动能及马尔可夫链转移概率综合降序排列)*
+### 🎯 2.1 绝密防守矩阵 (低热度盲区 Top 6)
+*(注：列表按全网模拟下注资金量由低到高排序，数字越靠前，庄家收割概率越高)*
 {special_text_block}
 
-### 🎲 2.2 正码精选 (6个防守位)
+### 🎲 2.2 正码精选 (6个常规防守位)
 {normal_text_block}
 
-### ⚖️ 2.3 核心偏态指标
+### ⚖️ 2.3 宏观偏态反指指标
+*(注：当某项指标严重倾斜时，散户通常会重注反方向，此时庄家极可能继续顺势爆破)*
 - **预测奇偶比:** {attributes.get('odd_even', '未知')}
 - **预测大小比:** {attributes.get('big_small', '未知')}
 - **7球预期和值:** {attributes.get('sum', '未知')}
