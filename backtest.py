@@ -3,15 +3,11 @@ import sqlite3
 import datetime
 from collections import defaultdict, deque
 import numpy as np
-from sklearn.ensemble import IsolationForest
-
-import ai_models
 
 def get_current_zodiac_map(ref_year):
     zodiac_order = ['鼠', '牛', '虎', '兔', '龍', '蛇', '馬', '羊', '猴', '雞', '狗', '豬']
-    year = ref_year
     base_year = 2020
-    current_zodiac_idx = (year - base_year) % 12
+    current_zodiac_idx = (ref_year - base_year) % 12
     zodiac_map = {z: [] for z in zodiac_order}
     for num in range(1, 50):
         offset = (num - 1) % 12
@@ -29,13 +25,6 @@ def get_current_wuxing_map(ref_year):
         pair_index = (((target_year - 1984) % 60) + 60) % 60 // 2
         wuxing_map[nayin_cycle[pair_index]].append(num)
     return wuxing_map
-
-def get_color_map():
-    return {
-        '红': [1, 2, 7, 8, 12, 13, 18, 19, 23, 24, 29, 30, 34, 35, 40, 45, 46],
-        '蓝': [3, 4, 9, 10, 14, 15, 20, 25, 26, 31, 36, 37, 41, 42, 47, 48],
-        '绿': [5, 6, 11, 16, 17, 21, 22, 27, 28, 32, 33, 38, 39, 43, 44, 49]
-    }
 
 def get_records_from_db(db_path='lottery.db'):
     conn = sqlite3.connect(db_path)
@@ -56,17 +45,17 @@ def get_records_from_db(db_path='lottery.db'):
         })
     return records
 
-def run_backtest(test_window=50, db_file='lottery.db'):
+def run_capital_heatmap_backtest(test_window=50, db_file='lottery.db'):
     records = get_records_from_db(db_file)
     total_records = len(records)
     
     if total_records < test_window + 50:
-        print("错误：数据量不足以支撑回测窗口与特征冷启动要求。")
+        print("错误：数据量不足以支撑回测窗口。")
         return
 
-    print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] 开启【逆向博弈与杀猪盘反推】模式测试...")
-    print(f"总数据量: {total_records} 期 | 回测窗口: 近 {test_window} 期")
-    print("-" * 60)
+    print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] 开启【散户资金热力图反杀】测试引擎...")
+    print(f"核心逻辑：模拟散户下注心理，锁定全盘资金量最低的庄家安全盲区。")
+    print("-" * 65)
 
     top1_hit_count = 0
     top6_hit_count = 0
@@ -80,240 +69,92 @@ def run_backtest(test_window=50, db_file='lottery.db'):
         actual_normals = set(target_record['numbers'])
         
         latest = history_slice[-1]
-        ref_year = int(latest['date'][:4])
         
-        ZODIAC_MAP = get_current_zodiac_map(ref_year)
-        NUM_TO_ZODIAC = {n: z for z, nums in ZODIAC_MAP.items() for n in nums}
-        WUXING_MAP = get_current_wuxing_map(ref_year)
-        NUM_TO_WUXING = {n: w for w, nums in WUXING_MAP.items() for n in nums}
-        COLOR_MAP = get_color_map()
-        NUM_TO_COLOR = {n: c for c, nums in COLOR_MAP.items() for n in nums}
-
-        RELATIONS = {
-            '三合': {'鼠':['龍','猴'], '牛':['蛇','雞'], '虎':['馬','狗'], '兔':['豬','羊'], '龍':['鼠','猴'], '蛇':['牛','雞'], '馬':['虎','狗'], '羊':['兔','豬'], '猴':['鼠','龍'], '雞':['牛','蛇'], '狗':['虎','馬'], '豬':['兔','羊']},
-            '六合': {'鼠':'牛', '牛':'鼠', '虎':'豬', '豬':'虎', '兔':'狗', '狗':'兔', '龍':'雞', '雞':'龍', '蛇':'猴', '猴':'蛇', '馬':'羊', '羊':'馬'},
-            '正冲': {'鼠':'馬', '馬':'鼠', '牛':'羊', '羊':'牛', '虎':'猴', '猴':'虎', '兔':'雞', '雞':'兔', '龍':'狗', '狗':'龍', '蛇':'豬', '豬':'蛇'},
-            '六害': {'鼠':'羊', '羊':'鼠', '牛':'馬', '馬':'牛', '虎':'蛇', '蛇':'虎', '兔':'龍', '龍':'兔', '猴':'豬', '豬':'猴', '狗':'雞', '雞':'狗'}
-        }
-        WUXING_SHENG = {'金':'水', '水':'木', '木':'火', '火':'土', '土':'金'}
-        WUXING_KE = {'金':'木', '木':'土', '土':'水', '水':'火', '火':'金'}
-
+        # 计算基础统计指标
         miss_tracker = {n: 0 for n in range(1, 50)}
-        freq_all = {n: 0 for n in range(1, 50)}
-        recent_50_queue = deque(maxlen=50) 
-        recent_30_queue = deque(maxlen=30) 
-        running_trans_counts = defaultdict(lambda: defaultdict(int))
-        running_trans_totals = defaultdict(int)
-
-        X_train_data = [] 
-        y_train_data = [] 
-        
-        iso_forest = IsolationForest(contamination=0.1, random_state=42)
+        freq_10 = {n: 0 for n in range(1, 50)}
+        recent_30_queue = deque(maxlen=30)
         
         for j in range(len(history_slice) - 1):
-            curr_draw = history_slice[j]
-            next_draw = history_slice[j+1]
-            
-            curr_nums = set(curr_draw['numbers'] + [curr_draw['special']])
-            next_nums = set(next_draw['numbers'] + [next_draw['special']])
-            
-            recent_50_queue.append(curr_nums)
+            curr_nums = set(history_slice[j]['numbers'] + [history_slice[j]['special']])
             recent_30_queue.append(curr_nums)
-            for n in curr_nums: freq_all[n] += 1
             for n in range(1, 50):
                 if n in curr_nums: miss_tracker[n] = 0
                 else: miss_tracker[n] += 1
 
-            freq_recent_50 = {n: 0 for n in range(1, 50)}
-            for past_nums in recent_50_queue:
-                for n in past_nums: freq_recent_50[n] += 1
-                    
-            freq_10 = {n: 0 for n in range(1, 50)}
-            freq_30 = {n: 0 for n in range(1, 50)}
-            for past_nums in list(recent_30_queue)[-10:]:
-                for n in past_nums: freq_10[n] += 1
-            for past_nums in recent_30_queue:
-                for n in past_nums: freq_30[n] += 1
-                    
-            last_special_zodiac = curr_draw['special_zodiac']
-            last_special_wuxing = NUM_TO_WUXING.get(curr_draw['special'], '金')
-            last_special_color = NUM_TO_COLOR.get(curr_draw['special'], '绿')
-            sanhe = RELATIONS['三合'].get(last_special_zodiac, [])
-            liuhe = RELATIONS['六合'].get(last_special_zodiac, '')
-            zhengchong = RELATIONS['正冲'].get(last_special_zodiac, '')
-            liuhai = RELATIONS['六害'].get(last_special_zodiac, '')
+        for past_nums in list(recent_30_queue)[-10:]:
+            for n in past_nums: freq_10[n] += 1
 
-            color_streak = 0
-            for past_draw in reversed(history_slice[:j+1]):
-                if NUM_TO_COLOR.get(past_draw['special'], '绿') == last_special_color:
-                    color_streak += 1
-                else:
-                    break
-            recent_5_wuxings = [NUM_TO_WUXING.get(r['special'], '金') for r in history_slice[max(0, j-4):j+1]]
-
-            for n in range(1, 50):
-                z = NUM_TO_ZODIAC.get(n, '')
-                w = NUM_TO_WUXING.get(n, '')
-                c = NUM_TO_COLOR.get(n, '绿')
-                zodiac_rel_val = 1 if z in sanhe or z == liuhe else (-1 if z == zhengchong or z == liuhai else 0)
-                wuxing_rel_val = 1 if WUXING_SHENG.get(last_special_wuxing) == w else (-1 if WUXING_KE.get(last_special_wuxing) == w else 0)
-                color_val = 1 if c == '红' else (2 if c == '蓝' else 3) 
-                macd_val = (freq_10[n] / 10.0) - (freq_30[n] / 30.0) if len(recent_30_queue) >= 30 else 0
-                markov_prob = running_trans_counts[last_special_zodiac][z] / running_trans_totals[last_special_zodiac] if running_trans_totals[last_special_zodiac] > 0 else 0.0
-                
-                color_cont_val = color_streak if c == last_special_color else 0
-                sheng_count = sum(1 for past_w in recent_5_wuxings if WUXING_SHENG.get(past_w) == w)
-                ke_count = sum(1 for past_w in recent_5_wuxings if WUXING_KE.get(past_w) == w)
-                wuxing_sk_ratio = (sheng_count - ke_count) / 5.0
-                
-                feat = [
-                    miss_tracker[n], freq_all[n], freq_recent_50[n], macd_val, markov_prob,                
-                    1 if n >= 25 else 0, 1 if n % 2 != 0 else 0, zodiac_rel_val, wuxing_rel_val, color_val,
-                    color_cont_val, wuxing_sk_ratio
-                ]
-                X_train_data.append(feat)
-                y_train_data.append(1 if n in next_nums else 0)
-                
-            running_trans_counts[curr_draw['special_zodiac']][next_draw['special_zodiac']] += 1
-            running_trans_totals[curr_draw['special_zodiac']] += 1
-
-        iso_forest.fit(X_train_data)
-        anomaly_scores = iso_forest.decision_function(X_train_data)
-        for idx in range(len(X_train_data)):
-            X_train_data[idx].append(anomaly_scores[idx])
-
-        # 构建待预测的最新一期特征
+        # 更新最新一期
         latest_nums = set(latest['numbers'] + [latest['special']])
-        recent_50_queue.append(latest_nums)
-        recent_30_queue.append(latest_nums)
-        for n in latest_nums: freq_all[n] += 1
         for n in range(1, 50):
             if n in latest_nums: miss_tracker[n] = 0
             else: miss_tracker[n] += 1
 
-        freq_recent_50 = {n: 0 for n in range(1, 50)}
-        for past_nums in recent_50_queue:
-            for n in past_nums: freq_recent_50[n] += 1
-                
-        freq_10 = {n: 0 for n in range(1, 50)}
-        freq_30 = {n: 0 for n in range(1, 50)}
-        for past_nums in list(recent_30_queue)[-10:]:
-            for n in past_nums: freq_10[n] += 1
-        for past_nums in recent_30_queue:
-            for n in past_nums: freq_30[n] += 1
-
+        # 宏观偏态探测 (反推散户抄底资金)
         reversed_hist = history_slice[::-1]
-        recent_10_big = sum(1 for r in reversed_hist[:10] for n in r['numbers']+[r['special']] if n >= 25)
-        recent_10_odd = sum(1 for r in reversed_hist[:10] for n in r['numbers']+[r['special']] if n % 2 != 0)
+        recent_5_big = sum(1 for r in reversed_hist[:5] for n in r['numbers']+[r['special']] if n >= 25)
+        recent_5_odd = sum(1 for r in reversed_hist[:5] for n in r['numbers']+[r['special']] if n % 2 != 0)
         
-        # 偏态绝对值
-        big_bias = (recent_10_big / 70.0) - 0.5
-        odd_bias = (recent_10_odd / 70.0) - 0.5
-        
-        last_special_zodiac = latest['special_zodiac']
-        last_special_wuxing = NUM_TO_WUXING.get(latest['special'], '金')
-        last_special_color = NUM_TO_COLOR.get(latest['special'], '绿')
-        
-        color_streak = 0
-        for past_draw in reversed(history_slice):
-            if NUM_TO_COLOR.get(past_draw['special'], '绿') == last_special_color:
-                color_streak += 1
-            else:
-                break
-        recent_5_wuxings = [NUM_TO_WUXING.get(r['special'], '金') for r in history_slice[-5:]]
-
-        sanhe = RELATIONS['三合'].get(last_special_zodiac, [])
-        liuhe = RELATIONS['六合'].get(last_special_zodiac, '')
-        zhengchong = RELATIONS['正冲'].get(last_special_zodiac, '')
-        liuhai = RELATIONS['六害'].get(last_special_zodiac, '')
-
-        X_predict_data = []
-        for n in range(1, 50):
-            z = NUM_TO_ZODIAC.get(n, '')
-            w = NUM_TO_WUXING.get(n, '')
-            c = NUM_TO_COLOR.get(n, '绿')
-            zodiac_rel_val = 1 if z in sanhe or z == liuhe else (-1 if z == zhengchong or z == liuhai else 0)
-            wuxing_rel_val = 1 if WUXING_SHENG.get(last_special_wuxing) == w else (-1 if WUXING_KE.get(last_special_wuxing) == w else 0)
-            color_val = 1 if c == '红' else (2 if c == '蓝' else 3)
-            macd_val = (freq_10[n] / 10.0) - (freq_30[n] / 30.0) if len(recent_30_queue) >= 30 else 0
-            markov_prob = running_trans_counts[last_special_zodiac][z] / running_trans_totals[last_special_zodiac] if running_trans_totals[last_special_zodiac] > 0 else 0.0
-            
-            color_cont_val = color_streak if c == last_special_color else 0
-            sheng_count = sum(1 for past_w in recent_5_wuxings if WUXING_SHENG.get(past_w) == w)
-            ke_count = sum(1 for past_w in recent_5_wuxings if WUXING_KE.get(past_w) == w)
-            wuxing_sk_ratio = (sheng_count - ke_count) / 5.0
-
-            feat = [
-                miss_tracker[n], freq_all[n], freq_recent_50[n], macd_val, markov_prob,
-                1 if n >= 25 else 0, 1 if n % 2 != 0 else 0, zodiac_rel_val, wuxing_rel_val, color_val,
-                color_cont_val, wuxing_sk_ratio
-            ]
-            X_predict_data.append(feat)
-
-        curr_anomaly_scores = iso_forest.decision_function(X_predict_data)
-        for idx in range(len(X_predict_data)):
-            X_predict_data[idx].append(curr_anomaly_scores[idx])
-
-        import sys, os
-        original_stdout = sys.stdout
-        sys.stdout = open(os.devnull, 'w') 
-        ensemble_probabilities = ai_models.get_ensemble_probabilities(X_train_data, y_train_data, X_predict_data)
-        sys.stdout = original_stdout 
+        # 散户心理：如果最近严重偏大，散户一定会重注买小博反弹
+        big_heavy_bet = recent_5_big > 20  # 大数过热，散户买小数
+        small_heavy_bet = recent_5_big < 15 # 小数过热，散户买大数
+        odd_heavy_bet = recent_5_odd > 20
+        even_heavy_bet = recent_5_odd < 15
 
         # ==========================================
-        # 4. 【深层逻辑迭代】逆向博弈与“杀猪盘”反推模拟
+        # 🧨 核心模块：构建散户资金热力图 (Simulated Betting Heatmap)
         # ==========================================
-        scores = defaultdict(float)
+        capital_heat = {}
         for n in range(1, 50):
-            if n in latest_nums:
-                continue
-
-            # AI 眼里找出的基础统计规律概率
-            base_score = ensemble_probabilities[n-1] * 100
+            heat = 100.0  # 基础底仓资金
             
-            is_big = 1 if n >= 25 else 0
-            is_odd = 1 if n % 2 != 0 else 0
-            
-            # --- 引入庄家逆向收割因子 (Banker Mindset) ---
-            banker_score = 0.0
-            
-            # 策略1：杀漏号 (散户倍投博反弹) -> 遗漏越久，越不可能出，直接打入死牢
-            if miss_tracker[n] >= 15:
-                banker_score -= 30.0  
+            # 1. 生日效应偏差 (日历号 1-31 资金天然沉淀)
+            if n <= 31:
+                heat += 25.0
                 
-            # 策略2：杀热号 (散户追连热旺码) -> 近期过于活跃，庄家直接截断
+            # 2. 玄学吉利号资金
+            if n % 10 in [6, 8, 9] or n in [11, 22, 33, 44]:
+                heat += 30.0
+                
+            # 3. 赌徒谬误：追漏资金 (呈指数级倍投)
+            if miss_tracker[n] >= 10:
+                # 遗漏超过10期后，每多一期，散户倍投的资金加码越重
+                heat += 15.0 + (miss_tracker[n] - 10) * 8.0 
+            if miss_tracker[n] > 20:
+                heat += 100.0 # 绝对冷号，挂满散户血本，极度危险区域
+
+            # 4. 追热效应：刚出的号和近期狂爆的号
+            if miss_tracker[n] == 0:
+                heat += 40.0 # 刚出的上期号码，散户喜欢买连码
             if freq_10[n] >= 3:
-                banker_score -= 20.0
+                heat += 50.0 # 旺码资金堆积
                 
-            # 策略3：长龙杀反弹 (均值反向回归)
-            # 散户看到连续出大，必定重注买小；庄家偏偏继续开大，爆破均值回归的玩家
-            if big_bias > 0.08 and is_big: 
-                banker_score += 8.0   # 大热必连大
-            elif big_bias < -0.08 and not is_big: 
-                banker_score += 8.0   # 小热必连小
-                
-            if odd_bias > 0.08 and is_odd: 
-                banker_score += 8.0
-            elif odd_bias < -0.08 and not is_odd: 
-                banker_score += 8.0
+            # 5. 宏观偏态反推：抄底资金
+            is_big = n >= 25
+            is_odd = n % 2 != 0
+            if big_heavy_bet and not is_big: heat += 60.0  # 散户疯狂买小
+            if small_heavy_bet and is_big: heat += 60.0    # 散户疯狂买大
+            if odd_heavy_bet and not is_odd: heat += 60.0  
+            if even_heavy_bet and is_odd: heat += 60.0
 
-            # 策略4：灯下黑盲区号收割 (无庄力区)
-            # 遗漏在 5~11 期之间，既非极冷也非极热，散户完全无视，这种号庄家赔付率极低
-            if 5 <= miss_tracker[n] <= 11 and freq_10[n] <= 1:
-                banker_score += 15.0  # 核心加权
+            # 记录该号码的模拟资金量
+            capital_heat[n] = heat
 
-            # 策略5：孤立森林反向应用 (反常识就是好常识)
-            # AI认为组合“极度诡异”的号码组合，反而最可能是庄家用来通杀盘面的号码
-            if curr_anomaly_scores[n-1] < -0.10:
-                banker_score += 10.0
+        # ==========================================
+        # 🛡️ 庄家收割打分：资金热度越低，分数越高 (完全逆向)
+        # ==========================================
+        scores = {}
+        for n in range(1, 50):
+            # 核心转化：得分 = 负的资金热度
+            scores[n] = -capital_heat[n]
 
-            # 最终打分 = 统计概率 + 庄家操盘博弈逻辑
-            scores[n] = base_score + banker_score
-
+        # 获取得分最高（即资金热度最低的无视盲区）的6个号码
         sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         top6_specials = [item[0] for item in sorted_scores[:6]]
         primary_special = top6_specials[0]
         
+        # 正码防守矩阵
         normal_candidates = []
         for num, _ in sorted_scores:
             if num == primary_special: continue
@@ -328,16 +169,16 @@ def run_backtest(test_window=50, db_file='lottery.db'):
         if is_top6_hit: top6_hit_count += 1
         normal_hit_rates.append(normal_hit_count)
 
-        hit_status = "🎯 TOP1 狙击命中!" if is_top1_hit else ("✅ TOP6 盲区覆盖" if is_top6_hit else "❌ 庄家诱空")
-        print(f"| 期数: {target_period} | 真实特码: {actual_special:02d} | 逆向博弈Top6: {[f'{n:02d}' for n in top6_specials]} | 状态: {hit_status}")
+        hit_status = "🎯 TOP1 盲区狙击!" if is_top1_hit else ("✅ TOP6 低热命中" if is_top6_hit else "❌ 庄家放弃收割")
+        print(f"| 期数: {target_period} | 真实特码: {actual_special:02d} | 低热度盲区 Top6: {[f'{n:02d}' for n in top6_specials]} | 状态: {hit_status}")
 
-    print("-" * 60)
-    print("📊 [量化回测总结报告 - 杀猪盘逆向博弈版]")
+    print("-" * 65)
+    print("📊 [资金热力图反杀模拟 - 回测总结报告]")
     print(f"测试样本量: {test_window} 期")
-    print(f"反杀狙击命中率 (Top 1): {top1_hit_count} / {test_window}  ({(top1_hit_count/test_window)*100:.2f}%)")
-    print(f"盲区矩阵覆盖率 (Top 6): {top6_hit_count} / {test_window}  ({(top6_hit_count/test_window)*100:.2f}%)")
+    print(f"庄家绝对盲区命中率 (Top 1): {top1_hit_count} / {test_window}  ({(top1_hit_count/test_window)*100:.2f}%)")
+    print(f"低赔付矩阵命中率 (Top 6): {top6_hit_count} / {test_window}  ({(top6_hit_count/test_window)*100:.2f}%)")
     print(f"正码防守平均命中数: {np.mean(normal_hit_rates):.2f} / 6")
-    print("-" * 60)
+    print("-" * 65)
 
 if __name__ == '__main__':
-    run_backtest(test_window=50)
+    run_capital_heatmap_backtest(test_window=50)
