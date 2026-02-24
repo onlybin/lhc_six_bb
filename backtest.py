@@ -56,7 +56,7 @@ def get_records_from_db(db_path='lottery.db'):
         })
     return records
 
-def run_backtest(test_window=20, db_file='lottery.db'):
+def run_backtest(test_window=50, db_file='lottery.db'):
     records = get_records_from_db(db_file)
     total_records = len(records)
     
@@ -64,7 +64,7 @@ def run_backtest(test_window=20, db_file='lottery.db'):
         print("错误：数据量不足以支撑回测窗口与特征冷启动要求。")
         return
 
-    print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] 开始执行量化回测...")
+    print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] 开启【逆向博弈与杀猪盘反推】模式测试...")
     print(f"总数据量: {total_records} 期 | 回测窗口: 近 {test_window} 期")
     print("-" * 60)
 
@@ -143,7 +143,6 @@ def run_backtest(test_window=20, db_file='lottery.db'):
             zhengchong = RELATIONS['正冲'].get(last_special_zodiac, '')
             liuhai = RELATIONS['六害'].get(last_special_zodiac, '')
 
-            # [深度扩展] 波色连续热度与五行压制比
             color_streak = 0
             for past_draw in reversed(history_slice[:j+1]):
                 if NUM_TO_COLOR.get(past_draw['special'], '绿') == last_special_color:
@@ -206,6 +205,8 @@ def run_backtest(test_window=20, db_file='lottery.db'):
         reversed_hist = history_slice[::-1]
         recent_10_big = sum(1 for r in reversed_hist[:10] for n in r['numbers']+[r['special']] if n >= 25)
         recent_10_odd = sum(1 for r in reversed_hist[:10] for n in r['numbers']+[r['special']] if n % 2 != 0)
+        
+        # 偏态绝对值
         big_bias = (recent_10_big / 70.0) - 0.5
         odd_bias = (recent_10_odd / 70.0) - 0.5
         
@@ -260,41 +261,54 @@ def run_backtest(test_window=20, db_file='lottery.db'):
         sys.stdout = original_stdout 
 
         # ==========================================
-        # 4. 偏态补偿、指纹继承与【极值杀号过滤】
+        # 4. 【深层逻辑迭代】逆向博弈与“杀猪盘”反推模拟
         # ==========================================
         scores = defaultdict(float)
         for n in range(1, 50):
             if n in latest_nums:
                 continue
 
-            # 基础 AI 概率得分
+            # AI 眼里找出的基础统计规律概率
             base_score = ensemble_probabilities[n-1] * 100
             
             is_big = 1 if n >= 25 else 0
             is_odd = 1 if n % 2 != 0 else 0
-            macd_val = X_predict_data[n-1][3]
             
-            # 宏观偏态补偿
-            if big_bias > 0.05 and not is_big: base_score += 1.5
-            elif big_bias < -0.05 and is_big: base_score += 1.5
-            if odd_bias > 0.05 and not is_odd: base_score += 1.5
-            elif odd_bias < -0.05 and is_odd: base_score += 1.5
-
-            continuous_fingerprint = (miss_tracker[n] * 0.033) + (freq_all[n] * 0.011) - (freq_recent_50[n] * 0.04) + (macd_val * 0.05)
+            # --- 引入庄家逆向收割因子 (Banker Mindset) ---
+            banker_score = 0.0
             
-            # 🧨 核心升维：极值杀号机制 (反向剔除极小概率事件)
-            penalty = 0
-            # 1. 绝对冷号杀除：遗漏超过 25 期以上的号码，不博反弹，直接降权
-            if miss_tracker[n] > 25:
-                penalty -= 5.0
-            # 2. 衰退热号杀除：最近 10 期内出现超过 3 次，动能透支，强制降温
+            # 策略1：杀漏号 (散户倍投博反弹) -> 遗漏越久，越不可能出，直接打入死牢
+            if miss_tracker[n] >= 15:
+                banker_score -= 30.0  
+                
+            # 策略2：杀热号 (散户追连热旺码) -> 近期过于活跃，庄家直接截断
             if freq_10[n] >= 3:
-                penalty -= 3.0
-            # 3. 异常分离群惩罚：如果孤立森林认为该号码特征极其诡异（异常分极低）
-            if curr_anomaly_scores[n-1] < -0.15:
-                penalty -= 2.0
+                banker_score -= 20.0
+                
+            # 策略3：长龙杀反弹 (均值反向回归)
+            # 散户看到连续出大，必定重注买小；庄家偏偏继续开大，爆破均值回归的玩家
+            if big_bias > 0.08 and is_big: 
+                banker_score += 8.0   # 大热必连大
+            elif big_bias < -0.08 and not is_big: 
+                banker_score += 8.0   # 小热必连小
+                
+            if odd_bias > 0.08 and is_odd: 
+                banker_score += 8.0
+            elif odd_bias < -0.08 and not is_odd: 
+                banker_score += 8.0
 
-            scores[n] = base_score + continuous_fingerprint + penalty
+            # 策略4：灯下黑盲区号收割 (无庄力区)
+            # 遗漏在 5~11 期之间，既非极冷也非极热，散户完全无视，这种号庄家赔付率极低
+            if 5 <= miss_tracker[n] <= 11 and freq_10[n] <= 1:
+                banker_score += 15.0  # 核心加权
+
+            # 策略5：孤立森林反向应用 (反常识就是好常识)
+            # AI认为组合“极度诡异”的号码组合，反而最可能是庄家用来通杀盘面的号码
+            if curr_anomaly_scores[n-1] < -0.10:
+                banker_score += 10.0
+
+            # 最终打分 = 统计概率 + 庄家操盘博弈逻辑
+            scores[n] = base_score + banker_score
 
         sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         top6_specials = [item[0] for item in sorted_scores[:6]]
@@ -314,17 +328,16 @@ def run_backtest(test_window=20, db_file='lottery.db'):
         if is_top6_hit: top6_hit_count += 1
         normal_hit_rates.append(normal_hit_count)
 
-        hit_status = "🎯 TOP1精确命中" if is_top1_hit else ("✅ TOP6矩阵命中" if is_top6_hit else "❌ 未命中")
-        print(f"| 期数: {target_period} | 真实特码: {actual_special:02d} | 预测Top6: {[f'{n:02d}' for n in top6_specials]} | 状态: {hit_status} | 正码防守命中: {normal_hit_count}/6")
+        hit_status = "🎯 TOP1 狙击命中!" if is_top1_hit else ("✅ TOP6 盲区覆盖" if is_top6_hit else "❌ 庄家诱空")
+        print(f"| 期数: {target_period} | 真实特码: {actual_special:02d} | 逆向博弈Top6: {[f'{n:02d}' for n in top6_specials]} | 状态: {hit_status}")
 
     print("-" * 60)
-    print("📊 [量化回测总结报告]")
+    print("📊 [量化回测总结报告 - 杀猪盘逆向博弈版]")
     print(f"测试样本量: {test_window} 期")
-    print(f"首选特码命中率 (Top 1): {top1_hit_count} / {test_window}  ({(top1_hit_count/test_window)*100:.2f}%)")
-    print(f"核心矩阵命中率 (Top 6): {top6_hit_count} / {test_window}  ({(top6_hit_count/test_window)*100:.2f}%)")
+    print(f"反杀狙击命中率 (Top 1): {top1_hit_count} / {test_window}  ({(top1_hit_count/test_window)*100:.2f}%)")
+    print(f"盲区矩阵覆盖率 (Top 6): {top6_hit_count} / {test_window}  ({(top6_hit_count/test_window)*100:.2f}%)")
     print(f"正码防守平均命中数: {np.mean(normal_hit_rates):.2f} / 6")
     print("-" * 60)
 
 if __name__ == '__main__':
-    # 将回测窗口扩大至 50 期，获取真实的统计学基线
     run_backtest(test_window=50)
