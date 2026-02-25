@@ -3,6 +3,7 @@ import subprocess
 import json
 import sys
 import io
+import datetime
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='ignore')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='ignore')
@@ -26,7 +27,7 @@ def run_script(script_name, *args):
 
 def run_predictor_with_fallback():
     """智能容灾降级机制：优先跑 Pro 版，报错则自动回退旧版"""
-    print("\n>>> 🚀 尝试启动 [Pro 增强版] 双引擎推演 (predictor_pro.py)...")
+    print("\n>>> 🚀 尝试启动 [资金热力反推引擎] (predictor_pro.py)...")
     cmd_pro = [sys.executable, 'predictor_pro.py']
     process_pro = subprocess.run(cmd_pro, capture_output=True, text=True, encoding='utf-8', errors='ignore')
     
@@ -35,7 +36,7 @@ def run_predictor_with_fallback():
         return
         
     print(f"⚠️ [Pro 版本运行异常] (系统已拦截):\n{process_pro.stderr}")
-    print(">>> 🔄 触发自动降级保护：正在切换回 [基础稳定版] 单引擎推演 (predictor.py)...")
+    print(">>> 🔄 触发自动降级保护：正在切换回备用引擎 (predictor.py)...")
     
     cmd_base = [sys.executable, 'predictor.py']
     process_base = subprocess.run(cmd_base, capture_output=True, text=True, encoding='utf-8', errors='ignore')
@@ -43,11 +44,11 @@ def run_predictor_with_fallback():
     if process_base.returncode == 0:
         print(process_base.stdout)
     else:
-        print(f"❌ [致命错误] 基础版也运行失败：\n{process_base.stderr}")
+        print(f"❌ [致命错误] 备用引擎也运行失败：\n{process_base.stderr}")
         exit(1)
 
 def generate_report(latest_prediction, analysis_data):
-    print("\n>>> 正在组装全模态分析报告...")
+    print("\n>>> 正在组装行为金融反杀大屏报告...")
     total_records = analysis_data.get('total_records', 0)
     
     special_rec_text = []
@@ -59,9 +60,9 @@ def generate_report(latest_prediction, analysis_data):
             wuxing = found[3] if len(found)>3 else '?'
             color = found[4] if len(found)>4 else '?'
             if i == 0:
-                special_rec_text.append(f"- **[首选] 第{i+1}名: {num:02d} ({zodiac}/{wuxing}/{color}波)** - 综合权重: **{score:.2f}** 🏆")
+                special_rec_text.append(f"- **[绝对盲区] 第{i+1}名: {num:02d} ({zodiac}/{wuxing}/{color}波)** - 安全权重: **{score:.2f}** 🛡️")
             else:
-                special_rec_text.append(f"- 第{i+1}名: **{num:02d} ({zodiac}/{wuxing}/{color}波)** - 综合权重: {score:.2f}")
+                special_rec_text.append(f"- 第{i+1}名: **{num:02d} ({zodiac}/{wuxing}/{color}波)** - 安全权重: {score:.2f}")
     special_text_block = '\n'.join(special_rec_text)
 
     normal_rec_text = []
@@ -70,32 +71,31 @@ def generate_report(latest_prediction, analysis_data):
         normal_rec_text.append(f"- **{num:02d} ({found[2] if found else '?'})**")
     normal_text_block = '\n'.join(normal_rec_text)
 
-    import datetime
     # 强制转换为东八区时间
     tz = datetime.timezone(datetime.timedelta(hours=8))
     report_time = datetime.datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')
     
     attributes = latest_prediction.get('combo_attributes', {})
 
-report_content = f"""# 📊 行为金融与资金热力反推大屏
+    report_content = f"""# 📊 行为金融与资金热力反推大屏
 
 **最近更新时间:** {report_time} | **目标推演期数:** 第 {latest_prediction.get('next_period')} 期
 
-> **[系统提示]** 底层算法已切换至【散户资金热力反推模型】。推演逻辑基于追热、博反弹、倍投追漏等散户博弈心理，为您锁定庄家低赔付的安全盲区。
+> **[底层协议]** 数据仓基于 {total_records} 期无损全量回溯。当前算法已全面切入【散户资金热力反推模型】。推演逻辑捕捉全网追热、博反弹、倍投追漏等散户博弈动作，为您反向锁定庄家低赔付的“绝对安全区”。
 
 ---
 
 ### 🎯 2.1 绝密防守矩阵 (低热度盲区 Top 6)
-*(注：列表按全网模拟下注资金量由低到高排序，数字越靠前，庄家收割概率越高)*
+*(注：列表按全网模拟下注资金量由低到高排序。权重分数越高，代表该号码吸附的散户资金越少，被庄家作为杀猪出口的概率越高。)*
 {special_text_block}
 
-### 🎲 2.2 正码精选 (6个常规防守位)
+### 🎲 2.2 边缘正码精选 (6个常规防守位)
 {normal_text_block}
 
-### ⚖️ 2.3 宏观偏态反指指标
-*(注：当某项指标严重倾斜时，散户通常会重注反方向，此时庄家极可能继续顺势爆破)*
-- **预测奇偶比:** {attributes.get('odd_even', '未知')}
-- **预测大小比:** {attributes.get('big_small', '未知')}
+### ⚖️ 2.3 宏观偏态诱导指标
+*(注：当盘面某项指标发生严重倾斜时，散户通常会重仓抄底博反方向，此时庄家往往会继续顺势爆破。以下为当前极易触发反杀的预期偏向：)*
+- **盘面奇偶预期:** {attributes.get('odd_even', '未知')}
+- **盘面大小预期:** {attributes.get('big_small', '未知')}
 - **7球预期和值:** {attributes.get('sum', '未知')}
 """
     with open(REPORT_FILE, 'w', encoding='utf-8') as f:
@@ -110,7 +110,7 @@ def main():
     run_script('fetcher.py')
     run_script('analyzer.py')
     
-    # 执行包含降级机制的引擎
+    # 执行包含降级机制的热力引擎
     run_predictor_with_fallback()
 
     with open(PREDICTION_RESULT_FILE, 'r', encoding='utf-8') as f:
@@ -120,7 +120,7 @@ def main():
 
     generate_report(prediction_data, analysis_data)
     print("\n=========================================")
-    print("✅ 全自动化流水线执行完毕！请刷新网页大屏查看。")
+    print("✅ 行为金融流水线执行完毕！请刷新极客大屏查看最终矩阵。")
     print("=========================================\n")
 
 if __name__ == '__main__':
