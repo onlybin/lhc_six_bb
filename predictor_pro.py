@@ -73,7 +73,7 @@ def predict_next_period(db_file='lottery.db', output_file='prediction.json'):
     NUM_TO_COLOR = {n: c for c, nums in COLOR_MAP.items() for n in nums}
 
     print("\n" + "="*50)
-    print(f"[系统] 启动【行为金融·资金热力盲区】实盘引擎 - 目标期数: {next_period}")
+    print(f"[系统] 启动【行为金融·资金热力盲区(精度强化版)】 - 目标期数: {next_period}")
     print("="*50 + "\n")
 
     miss_tracker = {n: 0 for n in range(1, 50)}
@@ -100,7 +100,7 @@ def predict_next_period(db_file='lottery.db', output_file='prediction.json'):
     even_heavy_bet = recent_5_odd < 15
 
     # ==========================================
-    # 核心：纯粹的资金行为热力学 (剔除无效玄学噪音)
+    # 核心：纯粹的资金行为热力学 (附加微弱防并列梯度)
     # ==========================================
     capital_heat = {}
     for n in range(1, 50):
@@ -127,15 +127,21 @@ def predict_next_period(db_file='lottery.db', output_file='prediction.json'):
         if odd_heavy_bet and not is_odd: heat += 60.0
         if even_heavy_bet and is_odd: heat += 60.0
 
+        # 5. 🌟 微观惩罚梯度 (打破同分并列)
+        # 即使都在盲区，遗漏值相对较大或数字靠后的号码，天然会多吸附一丝丝散户视线
+        micro_gradient = (miss_tracker[n] * 0.1) + (n * 0.01)
+        heat += micro_gradient
+
         capital_heat[n] = heat
 
     # ==========================================
-    # 庄家视角：热度越低，安全分数越高 (越可能被开出)
+    # 庄家视角：热度越低，安全分数越高 (严格浮点数排序)
     # ==========================================
     scores = {}
     for n in range(1, 50):
         scores[n] = 1000.0 - capital_heat[n]
 
+    # 保留两位小数的高精度排序
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     
     top6_specials = [item[0] for item in sorted_scores[:6]]
@@ -172,7 +178,7 @@ def predict_next_period(db_file='lottery.db', output_file='prediction.json'):
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(prediction, f, ensure_ascii=False, indent=2)
 
-    print(f"✅ 庄家盲区防守矩阵已生成！分析源已写入 {output_file}，准备通过主程序推送大屏。")
+    print(f"✅ 庄家高精度盲区矩阵已生成！分析源已写入 {output_file}，准备通过主程序推送大屏。")
 
 if __name__ == '__main__':
     predict_next_period()
